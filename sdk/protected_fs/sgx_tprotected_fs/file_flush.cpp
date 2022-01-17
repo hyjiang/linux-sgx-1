@@ -39,7 +39,7 @@
 #include <stdarg.h>
 #include <stdio.h> /* vsnprintf */
 #include <string.h>
-//WL: add debug function inside the enclave side of PFS
+
 /* 
  * printf: 
  *   Invokes OCALL to display the enclave buffer to the terminal.
@@ -514,12 +514,6 @@ bool protected_fs_file::write_all_changes_to_disk(bool flush_to_disk)
 				if (file_data_node->need_writing == false)
 					continue;
 
-				//WL: print plaintext file_data_node, aka. plain.data
-				// for (int i = 0; i < NODE_SIZE; i++)
-				// {
-				// 	sgxprotectedfs_printf("%c", (file_data_node->plain.data)[i]);
-				// }
-
 				data_to_write = (uint8_t *)&file_data_node->encrypted;
 				node_number = file_data_node->physical_node_number;
 			}
@@ -565,9 +559,6 @@ bool protected_fs_file::write_all_changes_to_disk(bool flush_to_disk)
 		root_mht.need_writing = false;
 		root_mht.new_node = false;
 	}
-
-	//WL: writing meta-data
-	sgxprotectedfs_printf("In: writing meta-data in write_all_changes_to_disk\n");
 	
 	status = u_sgxprotectedfs_fwrite_node(&result32, file, 0, (uint8_t *)&file_meta_data, NODE_SIZE);
 	if (status != SGX_SUCCESS || result32 != 0)
@@ -587,9 +578,6 @@ bool protected_fs_file::write_all_changes_to_disk(bool flush_to_disk)
 		}
 	}
 	
-	//WL: start to flush, but this is inside the enclave
-	// sgxprotectedfs_printf("\n****************write_all_changes_to_disk, flush flag: %d****************\n", flush_to_disk);
-
 	return true;
 }
 
