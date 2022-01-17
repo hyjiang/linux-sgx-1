@@ -17,7 +17,7 @@
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIE WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
  * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
@@ -43,7 +43,6 @@
 #include "sgx_tprotected_fs_u.h"
 #include <uprotected_fs.h>
 
-
 #ifdef DEBUG
 #define DEBUG_PRINT(fmt, args...) fprintf(stderr, "[sgx_uprotected_fs.h:%d] " fmt, __LINE__, ##args)
 #else
@@ -51,9 +50,130 @@
 #endif
 
 
-void* u_sgxprotectedfs_exclusive_file_open(const char* filename, uint8_t read_only, int64_t* file_size, int32_t* error_code)
+#define MAX_SNAPSHOT_COUNT 50
+//WL: assume we can only handle MAX_SNAPSHOT_COUNT/50? snapshots
+#define MAX_SNAPSHOT_FILE_LEN 51 * 2 * 4096
+#define SS_CACHE_THRES 48
+//WL: fd is the key, while write_times is the value
+//WL: 50 fds in total
+int sf_queue[MAX_SNAPSHOT_COUNT] = {0};
+//WL: collect a snapshot file, according to the file fd
+//WL: the mode can alway be rad-only
+int collect_snapshot_from_fd(int fd, off_t currpos, uint8_t *buffer, uint32_t node_size, char *target_file)
 {
-	FILE* f = NULL;
+
+	uint8_t snapshot_buffer[node_size];
+
+	// printf("current file offset: %ld\n", currpos);
+	off_t oripos = currpos;
+
+	//WL: open a new snapshot file, read node buffer, write the buffer to the new file
+	int target_fd = open(target_file, O_CREAT | O_RDWR, 0600);
+	if (target_fd < 0)
+	{
+		printf("open failed\n");
+	}
+
+	//WL: do not read from file; read from buffer instead
+	ssize_t ret = 0;
+	// ret = read(fd, snapshot_buffer, node_size);
+	memcpy(snapshot_buffer, buffer, node_size);
+
+	// printf("first 3 letters in snapshot_buffer: %c%c%c\n", snapshot_buffer[0], snapshot_buffer[1], snapshot_buffer[2]);
+	//WL: remember to use different fds
+	if ((ret = lseek(target_fd, currpos, SEEK_SET)) != 0)
+	{
+		// printf("lseek ret, aka. offset: %ld\n", ret);
+	}
+	ret = write(target_fd, snapshot_buffer, node_size);
+	if (ret < 0)
+	{
+		printf("read/write error!\n");
+	}
+
+	//WL: reset the offset
+	lseek(fd, oripos, SEEK_SET);
+
+	//WL: write a 4KB buffer one time
+	//WL: write_times++;
+
+	sf_queue[fd]++;
+	// if (sf_queue[fd] > SS_CACHE_THRES)
+	// {
+	// 	//WL: write a file over 48 times
+	// 	printf("\n****************Wrote File (fd=%d) 48 times ...****************\n", fd);
+	// 	//WL: reset the times
+	// 	sf_queue[fd] = 0;
+	// }
+	if ((currpos == 0) && (sf_queue[fd] >= SS_CACHE_THRES))
+	{
+		printf("Writing meta-data node into File(fd=%d); Total writing %d times ...\n", fd, sf_queue[fd]);
+		sf_queue[fd] = 0;
+	}
+
+	close(target_fd);
+
+	return 0;
+}
+
+//WL: collect a snapshot file, according to the file name
+//WL: the mode can alway be read-only
+int collect_snapshot_from_name(const char *filename, const char *mode)
+{
+	//WL: read config data from the protected file
+	//WL: have to open snapshot; the snapshot file is only opened by PFS APIs
+	FILE *fp_snapshot;
+	if ((fp_snapshot = fopen(filename, mode)) == NULL)
+	{
+		printf("Fail to open file!\n");
+		return -1;
+	}
+
+	//WL: get snapshot file length
+	unsigned long int snapshot_filelen = 0;
+	fseek(fp_snapshot, 0, SEEK_END);
+	snapshot_filelen = ftell(fp_snapshot);
+	printf("current snapshot file length: %ld\n", snapshot_filelen);
+	//WL: filter some files, according to the file length
+	//WL: requirepass at:
+
+	//WL: init snapshot_buffer
+	//WL: not the MAX_BUF_LEN
+	char snapshot_buffer[MAX_SNAPSHOT_FILE_LEN] = {0};
+	printf("Start to copy snapshot...\n");
+	fseek(fp_snapshot, 0, SEEK_SET);
+	size_t sizeofRead = fread(snapshot_buffer, 1, snapshot_filelen, fp_snapshot);
+	printf("first 3 letters in snapshot_buffer: %c%c%c\n", snapshot_buffer[0], snapshot_buffer[1], snapshot_buffer[2]);
+	printf("read %ld chars\n", sizeofRead);
+
+	//WL: write snapshot to final file
+	FILE *fp_snapshot_final;
+	const char *ss_filename = "redis.snapshot";
+	const char *ss_mode = "w+";
+	if ((fp_snapshot_final = fopen(ss_filename, ss_mode)) == NULL)
+	{
+		printf("Fail to open file!\n");
+		return -1;
+	}
+	unsigned long int sizeoffinal = fwrite(snapshot_buffer, 1, snapshot_filelen, fp_snapshot_final);
+	printf("final snapshot length: %ld\n", sizeoffinal);
+	//WL: do not close fp_snapshot
+	fclose(fp_snapshot_final);
+	return 0;
+}
+
+/* WL: OCall functions */
+void u_sgxprotectedfs_print_string(const char *str)
+{
+	/* Proxy/Bridge will check the length and null-terminate 
+     * the input string to prevent buffer overflow. 
+     */
+	printf("%s", str);
+}
+
+void *u_sgxprotectedfs_exclusive_file_open(const char *filename, uint8_t read_only, int64_t *file_size, int32_t *error_code)
+{
+	FILE *f = NULL;
 	int result = 0;
 	int fd = -1;
 	mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
@@ -69,7 +189,7 @@ void* u_sgxprotectedfs_exclusive_file_open(const char* filename, uint8_t read_on
 	}
 
 	// open the file with OS API so we can 'lock' the file and get exclusive access to it
-	fd = open(filename,	O_CREAT | (read_only ? O_RDONLY : O_RDWR) | O_LARGEFILE, mode); // create the file if it doesn't exists, read-only/read-write
+	fd = open(filename, O_CREAT | (read_only ? O_RDONLY : O_RDWR) | O_LARGEFILE, mode); // create the file if it doesn't exists, read-only/read-write
 	if (fd == -1)
 	{
 		DEBUG_PRINT("open returned %d, errno %d\n", result, errno);
@@ -118,8 +238,7 @@ void* u_sgxprotectedfs_exclusive_file_open(const char* filename, uint8_t read_on
 	return f;
 }
 
-
-uint8_t u_sgxprotectedfs_check_if_file_exists(const char* filename)
+uint8_t u_sgxprotectedfs_check_if_file_exists(const char *filename)
 {
 	struct stat stat_st;
 
@@ -134,10 +253,9 @@ uint8_t u_sgxprotectedfs_check_if_file_exists(const char* filename)
 	return (stat(filename, &stat_st) == 0);
 }
 
-
-int32_t u_sgxprotectedfs_fread_node(void* f, uint64_t node_number, uint8_t* buffer, uint32_t node_size)
+int32_t u_sgxprotectedfs_fread_node(void *f, uint64_t node_number, uint8_t *buffer, uint32_t node_size)
 {
-	FILE* file = (FILE*)f;
+	FILE *file = (FILE *)f;
 	uint64_t offset = node_number * node_size;
 	int result = 0;
 	size_t size = 0;
@@ -184,10 +302,9 @@ int32_t u_sgxprotectedfs_fread_node(void* f, uint64_t node_number, uint8_t* buff
 	return 0;
 }
 
-
-int32_t u_sgxprotectedfs_fwrite_node(void* f, uint64_t node_number, uint8_t* buffer, uint32_t node_size)
+int32_t u_sgxprotectedfs_fwrite_node(void *f, uint64_t node_number, uint8_t *buffer, uint32_t node_size)
 {
-	FILE* file = (FILE*)f;
+	FILE *file = (FILE *)f;
 	uint64_t offset = node_number * node_size;
 	int result = 0;
 	size_t size = 0;
@@ -213,6 +330,7 @@ int32_t u_sgxprotectedfs_fwrite_node(void* f, uint64_t node_number, uint8_t* buf
 	if ((size = fwrite(buffer, node_size, 1, file)) != 1)
 	{
 		DEBUG_PRINT("fwrite returned %ld [!= 1]\n", size);
+
 		int err = ferror(file);
 		if (err != 0)
 			return err;
@@ -225,15 +343,57 @@ int32_t u_sgxprotectedfs_fwrite_node(void* f, uint64_t node_number, uint8_t* buf
 			return -1;
 	}
 
+	//WL: fwrite should be succeeded here, so that we can start to collect snapshot
+	//WL: here we enforce an fflush
+	// if ((result = fflush(file)) != 0)
+	// {
+	// 	DEBUG_PRINT("fflush returned %d\n", result);
+	// 	//WL: return -1
+	// 	printf("fflush failed!\n");
+	// 	return -1;
+	// }
+	// printf("Out: flushing ...\n");
+
+	// printf("offset: %ld, writing %d chars of node %ld at %p\n", offset, node_size, node_number, file);
+	// printf("first 3 letters in buffer: %c%c%c\n", buffer[0], buffer[1], buffer[2]);
+
+	//WL: catch every snapshot,
+	//e.g., we can collect the snapshot every 50 sgx_fwrite() ?
+	//WL: Todo: interrupt the program?
+	int fd = fileno(file);
+	// printf("WL: fd = %d\n", fd);
+
+	// if ((result = fsync(fd)) != 0)
+	// {
+	// 	DEBUG_PRINT("fsync returned %d\n", result);
+	// 	//WL: return -1
+	// 	printf("fsync failed!\n");
+	// 	return -1;
+	// }
+	// printf("Out: fsyncing ...\n");
+
+	//WL: write snapshot at /tmp
+	char ss_filename[50] = {"/tmp/"};
+	char fd_string[3] = {0};
+	sprintf(fd_string, "%d", fd);
+	strcat(ss_filename, "ss.rec.");
+	strcat(ss_filename, fd_string);
+	int collect_ret = collect_snapshot_from_fd(fd, offset, buffer, node_size, ss_filename);
+	if (collect_ret == 0)
+	{
+		// printf("Snapshot collected...\n");
+	}
+
 	return 0;
 }
 
-
-int32_t u_sgxprotectedfs_fclose(void* f)
+int32_t u_sgxprotectedfs_fclose(void *f)
 {
-	FILE* file = (FILE*)f;
+	FILE *file = (FILE *)f;
 	int result = 0;
 	int fd = 0;
+
+	// printf("WL: calling u_sgxprotectedfs_fclose\n");
 
 	if (file == NULL)
 	{
@@ -263,10 +423,9 @@ int32_t u_sgxprotectedfs_fclose(void* f)
 	return 0;
 }
 
-
-uint8_t u_sgxprotectedfs_fflush(void* f)
+uint8_t u_sgxprotectedfs_fflush(void *f)
 {
-	FILE* file = (FILE*)f;
+	FILE *file = (FILE *)f;
 	int result;
 
 	if (file == NULL)
@@ -278,14 +437,14 @@ uint8_t u_sgxprotectedfs_fflush(void* f)
 	if ((result = fflush(file)) != 0)
 	{
 		DEBUG_PRINT("fflush returned %d\n", result);
+
 		return 1;
 	}
 
 	return 0;
 }
 
-
-int32_t u_sgxprotectedfs_remove(const char* filename)
+int32_t u_sgxprotectedfs_remove(const char *filename)
 {
 	int result;
 
@@ -296,7 +455,7 @@ int32_t u_sgxprotectedfs_remove(const char* filename)
 	}
 
 	if ((result = remove(filename)) != 0)
-	{// this function is called from the destructor which is called when calling fclose, if there were no writes, there is no recovery file...we don't want endless prints...
+	{ // this function is called from the destructor which is called when calling fclose, if there were no writes, there is no recovery file...we don't want endless prints...
 		//DEBUG_PRINT("remove returned %d\n", result);
 		if (errno != 0)
 			return errno;
@@ -307,10 +466,10 @@ int32_t u_sgxprotectedfs_remove(const char* filename)
 }
 
 #define MILISECONDS_SLEEP_FOPEN 10
-#define MAX_FOPEN_RETRIES       10
-void* u_sgxprotectedfs_recovery_file_open(const char* filename)
+#define MAX_FOPEN_RETRIES 10
+void *u_sgxprotectedfs_recovery_file_open(const char *filename)
 {
-	FILE* f = NULL;
+	FILE *f = NULL;
 
 	if (filename == NULL || strnlen(filename, 1) == 0)
 	{
@@ -334,10 +493,9 @@ void* u_sgxprotectedfs_recovery_file_open(const char* filename)
 	return f;
 }
 
-
-uint8_t u_sgxprotectedfs_fwrite_recovery_node(void* f, uint8_t* data, uint32_t data_length)
+uint8_t u_sgxprotectedfs_fwrite_recovery_node(void *f, uint8_t *data, uint32_t data_length)
 {
-	FILE* file = (FILE*)f;
+	FILE *file = (FILE *)f;
 
 	if (file == NULL)
 	{
@@ -356,11 +514,10 @@ uint8_t u_sgxprotectedfs_fwrite_recovery_node(void* f, uint8_t* data, uint32_t d
 	return 0;
 }
 
-
-int32_t u_sgxprotectedfs_do_file_recovery(const char* filename, const char* recovery_filename, uint32_t node_size)
+int32_t u_sgxprotectedfs_do_file_recovery(const char *filename, const char *recovery_filename, uint32_t node_size)
 {
-	FILE* recovery_file = NULL;
-	FILE* source_file = NULL;
+	FILE *recovery_file = NULL;
+	FILE *source_file = NULL;
 	int32_t ret = -1;
 	uint32_t nodes_count = 0;
 	uint32_t recovery_node_size = (uint32_t)(sizeof(uint64_t)) + node_size; // node offset + data
@@ -368,7 +525,7 @@ int32_t u_sgxprotectedfs_do_file_recovery(const char* filename, const char* reco
 	int err = 0;
 	int result = 0;
 	size_t count = 0;
-	uint8_t* recovery_node = NULL;
+	uint8_t *recovery_node = NULL;
 	uint32_t i = 0;
 
 	do
@@ -421,7 +578,7 @@ int32_t u_sgxprotectedfs_do_file_recovery(const char* filename, const char* reco
 
 		nodes_count = (uint32_t)(file_size / recovery_node_size);
 
-		recovery_node = (uint8_t*)malloc(recovery_node_size);
+		recovery_node = (uint8_t *)malloc(recovery_node_size);
 		if (recovery_node == NULL)
 		{
 			DEBUG_PRINT("malloc failed\n");
@@ -437,7 +594,7 @@ int32_t u_sgxprotectedfs_do_file_recovery(const char* filename, const char* reco
 			break;
 		}
 
-		for (i = 0 ; i < nodes_count ; i++)
+		for (i = 0; i < nodes_count; i++)
 		{
 			if ((count = fread(recovery_node, recovery_node_size, 1, recovery_file)) != 1)
 			{
@@ -451,7 +608,7 @@ int32_t u_sgxprotectedfs_do_file_recovery(const char* filename, const char* reco
 			}
 
 			// seek the regular file to the required offset
-			if ((result = fseeko(source_file, (*((uint64_t*)recovery_node)) * node_size, SEEK_SET)) != 0)
+			if ((result = fseeko(source_file, (*((uint64_t *)recovery_node)) * node_size, SEEK_SET)) != 0)
 			{
 				DEBUG_PRINT("fseeko returned %d\n", result);
 				if (errno != 0)
@@ -484,7 +641,7 @@ int32_t u_sgxprotectedfs_do_file_recovery(const char* filename, const char* reco
 
 		ret = 0;
 
-	} while(0);
+	} while (0);
 
 	if (recovery_node != NULL)
 		free(recovery_node);

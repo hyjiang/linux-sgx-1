@@ -370,6 +370,7 @@ file_data_node_t* protected_fs_file::get_data_node()
 	}
 
 	// even if we didn't get the required data_node, we might have read other nodes in the process
+	//WL: MAX_PAGES_IN_CACHE is only used here
 	while (cache.size() > MAX_PAGES_IN_CACHE)
 	{
 		void* data = cache.get_last();
