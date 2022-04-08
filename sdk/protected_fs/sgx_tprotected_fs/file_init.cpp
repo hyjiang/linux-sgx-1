@@ -112,6 +112,9 @@ protected_fs_file::protected_fs_file(const char* filename, const char* mode, con
 		// last_error already set
 		return;
 
+	if (derive_random_session_id() == false)
+		return;
+
 	if (kdk_key != NULL)
 	{
 		// for new file, this value will later be saved in the meta data plain part (init_new_file)
@@ -277,6 +280,9 @@ void protected_fs_file::init_fields()
 	open_mode.raw = 0;
 	use_user_kdk_key = 0;
 	master_key_count = 0;
+
+	cache_flag = false;
+	memset(&session_id, 0, sizeof(sgx_key_id_t));
 
 	recovery_filename[0] = '\0';
 
@@ -474,6 +480,14 @@ bool protected_fs_file::init_existing_file(const char* filename, const char* cle
 		return false;
 	}
 
+	// if the cache flag of existing SGX file is true
+	// it means the file is during caching process, or the file is corrupted
+	if (encrypted_part_plain.cache_flag == true)
+	{
+		last_error = SGX_FILE_STATUS_CACHE_IN_PROGRESS;
+		return false;
+	}
+
 	if (strncmp(clean_filename, encrypted_part_plain.clean_filename, FILENAME_MAX_LEN) != 0)
 	{
 		last_error = SGX_ERROR_FILE_NAME_MISMATCH;
@@ -558,6 +572,9 @@ bool protected_fs_file::init_existing_file(const char* filename, const char* cle
 		root_mht.new_node = false;
 	}
 
+	// try to update session ID
+	memcpy(&encrypted_part_plain.session_id, &session_id, sizeof(sgx_key_id_t));
+
 	return true;
 }
 
@@ -572,6 +589,9 @@ bool protected_fs_file::init_new_file(const char* clean_filename)
 	file_meta_data.plain_part.integrity_only = integrity_only;
 
 	strncpy(encrypted_part_plain.clean_filename, clean_filename, FILENAME_MAX_LEN);
+
+    // try to update session ID
+    memcpy(&encrypted_part_plain.session_id, &session_id, sizeof(sgx_key_id_t));
 
 	need_writing = true;
 
@@ -607,6 +627,9 @@ protected_fs_file::~protected_fs_file()
 	// scrub first 3KB of user data and the gmac_key
 	memset_s(&encrypted_part_plain, sizeof(meta_data_encrypted_t), 0, sizeof(meta_data_encrypted_t));
 
+	// scrub random session ID
+	memset_s(&session_id, sizeof(sgx_key_id_t), 0, sizeof(sgx_key_id_t));
+
 	sgx_thread_mutex_destroy(&mutex);
 }
 
@@ -635,7 +658,9 @@ bool protected_fs_file::pre_close(sgx_key_128bit_t* key, bool import)
 	}
 	else // file_status == SGX_FILE_STATUS_OK
 	{
-		internal_flush(/*false,*/ true);
+		// clear the random seesion ID before close the file
+		memset(&encrypted_part_plain.session_id, 0, sizeof(sgx_key_id_t));
+		internal_flush(false, true);
 	}
 
 	if (file_status != SGX_FILE_STATUS_OK)

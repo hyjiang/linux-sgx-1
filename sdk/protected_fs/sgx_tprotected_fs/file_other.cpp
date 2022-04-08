@@ -286,7 +286,7 @@ void protected_fs_file::clear_error()
 
 	if (file_status == SGX_FILE_STATUS_FLUSH_ERROR)
 	{
-		if (internal_flush(/*false,*/ true) == true)
+		if (internal_flush(false, true) == true)
 			file_status = SGX_FILE_STATUS_OK;
 	}
 
@@ -349,7 +349,7 @@ int32_t protected_fs_file::clear_cache()
 	}
 	else // file_status == SGX_FILE_STATUS_OK
 	{
-		internal_flush(/*false,*/ true);
+		internal_flush(true, true);
 	}
 
 	if (file_status != SGX_FILE_STATUS_OK) // clearing the cache might lead to losing un-saved data

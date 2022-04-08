@@ -52,6 +52,7 @@ typedef enum
 	SGX_FILE_STATUS_CRYPTO_ERROR,
 	SGX_FILE_STATUS_CORRUPTED,
 	SGX_FILE_STATUS_MEMORY_CORRUPTED,
+	SGX_FILE_STATUS_CACHE_IN_PROGRESS,
 	//SGX_FILE_STATUS_WRITE_TO_DISK_FAILED_NEED_MC,
 	//SGX_FILE_STATUS_MC_NOT_INCREMENTED,
 	SGX_FILE_STATUS_CLOSED,
@@ -93,7 +94,7 @@ the following 2 structures are almost identical, i do not merge them (union or c
 */
 typedef struct _file_mht_node
 {
-	/* these are exactly the same as file_data_node_t below, any change should apply to both (both are saved in the cache as void*) */
+	/* these are almost the same as file_data_node_t below, any change should apply to both (both are saved in the cache as void*) */
 	uint8_t type;
 	uint64_t mht_node_number;
 	struct _file_mht_node* parent;
@@ -113,7 +114,7 @@ typedef struct _file_mht_node
 
 typedef struct _file_data_node
 {
-	/* these are exactly the same as file_mht_node_t above, any change should apply to both (both are saved in the cache as void*) */
+	/* these are almost the same as file_mht_node_t above, any change should apply to both (both are saved in the cache as void*) */
 	uint8_t type;
 	uint64_t data_node_number;
 	file_mht_node_t* parent;
@@ -176,6 +177,11 @@ private:
 	sgx_iv_t empty_iv;
 	sgx_report_t report;
 
+	// prevent replay attack
+	// defense in depth
+	sgx_key_id_t session_id;
+	bool cache_flag;
+
 	void init_fields();
 	bool cleanup_filename(const char* src, char* dest);
 	bool parse_mode(const char* mode);
@@ -189,6 +195,7 @@ private:
 	bool derive_random_node_key(uint64_t physical_node_number);
 	bool generate_random_meta_data_key();
 	bool restore_current_meta_data_key(const sgx_aes_gcm_128bit_key_t* import_key);
+	bool derive_random_session_id();
 
 
 	file_data_node_t* get_data_node();
@@ -201,10 +208,12 @@ private:
 	bool set_update_flag(bool flush_to_disk);
 	void clear_update_flag();
 	bool update_all_data_and_mht_nodes();
-	bool update_meta_data_node();
+	bool update_meta_data_node(bool set_cache_flag);
 	bool write_all_changes_to_disk(bool flush_to_disk);
 	void erase_recovery_file();
-	bool internal_flush(/*bool mc,*/ bool flush_to_disk);
+    bool internal_flush(bool set_cache_flag, bool flush_to_disk);
+    bool check_session_id(sgx_key_id_t *original_session_id);
+
 
 public:
 	protected_fs_file(const char* filename, const char* mode, const sgx_aes_gcm_128bit_key_t* import_key, const sgx_aes_gcm_128bit_key_t* kdk_key, bool integrity_only);

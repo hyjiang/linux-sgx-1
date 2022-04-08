@@ -88,6 +88,9 @@ typedef struct _meta_data_encrypted
 	sgx_mc_uuid_t mc_uuid; // not used
 	uint32_t      mc_value; // not used
 
+	bool		  cache_flag;
+	sgx_key_id_t  session_id;
+
 	sgx_aes_gcm_128bit_key_t mht_key;
 	sgx_aes_gcm_128bit_tag_t mht_gmac;
 

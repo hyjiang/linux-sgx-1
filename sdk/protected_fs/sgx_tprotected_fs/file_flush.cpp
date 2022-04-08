@@ -40,8 +40,8 @@
 #include <stdio.h> /* vsnprintf */
 #include <string.h>
 
-/* 
- * printf: 
+/*
+ * printf:
  *   Invokes OCALL to display the enclave buffer to the terminal.
  */
 int sgxprotectedfs_printf(const char *fmt, ...)
@@ -53,6 +53,17 @@ int sgxprotectedfs_printf(const char *fmt, ...)
 	va_end(ap);
 	u_sgxprotectedfs_print_string(buf);
 	return (int)strnlen(buf, BUFSIZ - 1) + 1;
+}
+
+bool protected_fs_file::check_session_id(sgx_key_id_t *original_session_id)
+{
+	if (original_session_id == NULL)
+		return false;
+
+	if (memcmp(original_session_id, &session_id, sizeof(sgx_key_id_t)) != 0)
+		return false;
+
+	return true;
 }
 
 bool protected_fs_file::flush(/*bool mc*/)
@@ -74,7 +85,7 @@ bool protected_fs_file::flush(/*bool mc*/)
 		return false;
 	}
 
-	result = internal_flush(/*mc,*/ true);
+	result = internal_flush(false, true);
 	if (result == false)
 	{
 		assert(file_status != SGX_FILE_STATUS_OK);
@@ -87,7 +98,7 @@ bool protected_fs_file::flush(/*bool mc*/)
 	return result;
 }
 
-bool protected_fs_file::internal_flush(/*bool mc,*/ bool flush_to_disk)
+bool protected_fs_file::internal_flush(bool set_cache_flag, bool flush_to_disk)
 {
 	if (need_writing == false) // no changes at all
 		return true;
@@ -142,7 +153,7 @@ bool protected_fs_file::internal_flush(/*bool mc,*/ bool flush_to_disk)
 		encrypted_part_plain.mc_value++;
 	}
 */
-	if (_RECOVERY_HOOK_(3) || update_meta_data_node() != true)
+	if (_RECOVERY_HOOK_(3) || update_meta_data_node(set_cache_flag) != true)
 	{
 		clear_update_flag();
 		/*
@@ -450,7 +461,7 @@ bool protected_fs_file::update_all_data_and_mht_nodes()
 	return true;
 }
 
-bool protected_fs_file::update_meta_data_node()
+bool protected_fs_file::update_meta_data_node(bool set_cache_flag)
 {
 	sgx_status_t status;
 
@@ -460,6 +471,10 @@ bool protected_fs_file::update_meta_data_node()
 		// last error already set
 		return false;
 	}
+
+    // set cache flag during file operation
+    // the flag will be cleared during file close or exeception
+    encrypted_part_plain.cache_flag = set_cache_flag;
 
 	if (!integrity_only)
 	{
@@ -559,7 +574,7 @@ bool protected_fs_file::write_all_changes_to_disk(bool flush_to_disk)
 		root_mht.need_writing = false;
 		root_mht.new_node = false;
 	}
-	
+
 	status = u_sgxprotectedfs_fwrite_node(&result32, file, 0, (uint8_t *)&file_meta_data, NODE_SIZE);
 	if (status != SGX_SUCCESS || result32 != 0)
 	{
@@ -577,7 +592,7 @@ bool protected_fs_file::write_all_changes_to_disk(bool flush_to_disk)
 			return false;
 		}
 	}
-	
+
 	return true;
 }
 

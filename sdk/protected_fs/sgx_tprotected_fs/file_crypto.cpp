@@ -263,6 +263,20 @@ bool protected_fs_file::generate_random_meta_data_key()
 	return true;
 }
 
+bool protected_fs_file::derive_random_session_id()
+{
+	// clean original session id if exist
+	memset(&session_id, 0, sizeof(sgx_key_id_t));
+
+	sgx_status_t status = sgx_read_rand((unsigned char*)&session_id, sizeof(sgx_key_id_t));
+	if (status != SGX_SUCCESS)
+	{
+		last_error = status;
+		return false;
+	}
+
+	return true;
+}
 
 bool protected_fs_file::restore_current_meta_data_key(const sgx_aes_gcm_128bit_key_t* import_key)
 {

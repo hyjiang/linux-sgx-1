@@ -348,6 +348,13 @@ file_data_node_t* protected_fs_file::get_data_node()
 		return NULL;
 	}
 
+	// check the random session ID
+	if (check_session_id(&encrypted_part_plain.session_id) != true)
+	{
+		last_error = SGX_ERROR_UNEXPECTED;
+		return NULL;
+	}
+
 	if ((offset - MD_USER_DATA_SIZE) % NODE_SIZE == 0 &&
 		offset == encrypted_part_plain.size)
 	{// new node
@@ -400,7 +407,7 @@ file_data_node_t* protected_fs_file::get_data_node()
 		}
 		else
 		{
-			if (internal_flush(/*false,*/ false) == false) // error, can't flush cache, file status changed to error
+			if (internal_flush(true, false) == false) // error, can't flush cache, file status changed to error
 			{
 				assert(file_status != SGX_FILE_STATUS_OK);
 				if (file_status == SGX_FILE_STATUS_OK)
